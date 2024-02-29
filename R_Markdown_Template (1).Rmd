@@ -1,0 +1,452 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+Introduction: This R Markdown file is a Seurat tutorial that demonstrates the different steps of the analysis pipeline, including data preprocessing, quality control, normalization, dimensionality reduction, clustering, and identification of marker genes. It also covers additional analyses such as differential gene expression and cell type annotation.
+---
+title: "Seurat Tutorial 5/4/2023"
+author: "Balkrishna Baral"
+date: "3 5 2023"
+output: 
+  html_document:
+    depth: 6
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+# Importing Libraries
+```{r}
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+
+```
+
+# Opening the file
+Creating a Seurat object and filtering out transcripts present in more than 3 nuclei
+```{r}
+pbmc.data <- Read10X(data.dir = "C:/Users/bbara/Desktop/filtered_feature_bc_matrix")
+
+```
+
+
+```{r}
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "Nuclear RNA", min.cells=3)
+dim(pbmc.data)
+dim(pbmc)
+```
+
+# Print the total number of cells
+```{r}
+n.cells <- ncol(pbmc@assays$RNA@counts)
+print(paste0("Number of cells before filtering: ", n.cells))
+```
+
+
+# Filter out low-quality cells
+```{r}
+pbmc <- subset(pbmc, nFeature_RNA > 200)
+pbmc
+```
+
+# Find the percentage of mitochondrial genes
+```{r}
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+```
+pbmc[["percent.mt"]] creates a new column called percent.mt
+PercentageFeatureSet() is a function in Seurat that calculates the percentage of cells expression certain gene
+
+
+# Visualizing as Violin plot
+```{r}
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+# Calculating percentage of different genes
+
+```{r}
+gene_names <- c("OCT4", "SOX2", "MT")
+
+# Compute the percentage of UMIs for each gene
+for (gene_name in gene_names) {
+  pbmc[[paste0("percent.", gene_name)]] <- PercentageFeatureSet(pbmc, pattern = paste0( gene_name))
+}
+
+# Visualize the percentage of UMIs for each gene using violin plots
+VlnPlot(pbmc, features = paste0("percent.", gene_names), ncol = length(gene_names))
+```
+```{r}
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+# Visualizing as scatter plot
+```{r}
+plot(pbmc@meta.data$nCount_RNA, pbmc@meta.data$percent.mt)
+plot(pbmc@meta.data$nCount_RNA, pbmc@meta.data$nFeature_RNA)
+```
+
+# Filtering the cells, counting, and visuaalizing the cells using a gg plot
+`
+```{r}
+library(ggplot2)
+# Filter cells based on nFeature_RNA and percent.mt
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 10)
+# Counting cells
+n.cells <- ncol(pbmc@assays$RNA@counts)
+print(paste0("Number of cells after filtering: ", n.cells))
+# Visualize filtered cells
+ggplot(pbmc@meta.data, aes(x = nFeature_RNA, y = percent.mt)) +
+  geom_point() +
+  labs(x = "Number of RNA features",
+       y = "Percentage of mitochondrial genes") +
+  theme_bw()
+```
+
+
+
+
+
+
+# Checking if normalization worked
+Normalization involves adjusting the read counts of each gene for differences in library size, so that the overall expression of each sample is comparable.
+For example, RPKM normalization divides the raw read count of a gene by the length of the gene and the total number of mapped reads in the sample.
+```{r}
+plot((colSums(as.matrix(GetAssayData(pbmc, slot = "data")))),
+     xlab = "Cells", ylab = "Total Counts")
+pbmc <- NormalizeData(pbmc)
+plot((colSums(as.matrix(GetAssayData(pbmc, slot = "data")))),
+     xlab = "Cells", ylab = "Total gene expression count for each cell")
+```
+
+A brief description of this code:
+GetAssayData(pbmc, slot = "data"): This function call retrieves the matrix of expression data from the Seurat object pbmc. The slot = "data" argument specifies that we want the expression data from the RNA assay, which is stored in the data slot of the Seurat object.
+
+as.matrix(): The GetAssayData() function returns a sparse matrix object of class dgCMatrix, which is a memory-efficient format for storing large matrices with many zero values. The as.matrix() function converts this sparse matrix object to a standard matrix object of class matrix, which is easier to work with for many operations.
+
+colSums(): This function calculates the sum of each column (i.e., each gene) in the matrix of expression data. Since each column represents the expression of a different gene across all cells in the dataset, the resulting vector of column sums provides a measure of the total expression of each gene across all cells.
+
+So in summary, the colSums(as.matrix(GetAssayData(pbmc, slot = "data"))) code calculates the total expression of each gene across all cells in the Seurat object pbmc, which is then plotted before and after normalization.
+
+
+# Identifying highly variable features 
+Features or genes show high cell-to-cell variation in the dataset (i.e, they are highly expressed in some cells, and lowly expressed in others). Focusing on these genes in downstream analysis helps to highlight biological signal in single-cell datasets. This finally helps to identify differentially expressed genes and making different clusters.
+```{r}
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+```
+A brief description of this code:
+1. selection.method = "vst" specifies that VST values will be used to calculate the variable features
+2. nfeatures = 2000 specifies that the top 2000 most variable features will be selected for downstream analysis.
+3. The FindVariableFeatures() function in Seurat to identify the most variable features (genes) in the pbmc object.
+
+
+# Identify the 10 most highly variable genes
+```{r}
+top10 <- head(VariableFeatures(pbmc), 10)
+```
+
+# plot variable features with and without labels
+```{r, fig.height=7, fig.width=13}
+plot1 <- VariableFeaturePlot(pbmc)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+
+# Scaling the data 
+Scaling involves adjusting the expression levels of each gene so that they have comparable distributions across samples.
+For example, to perform Z-score scaling, we first calculate the mean and standard deviation of expression values for each gene across all samples. Then, we subtract the mean and divide by the standard deviation for each gene in each sample. This gives us a new set of values for each gene, where the mean is zero and the standard deviation is one across all samples. This process ensures that the distribution of expression levels for each gene is comparable across samples, making it easier to identify differentially expressed genes.
+
+# Check if scaling worked using a heat map
+```{r}
+DoHeatmap(pbmc, slot="data")
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+DoHeatmap(pbmc, slot="scale.data")
+
+```
+
+In the heat map, we can see even the genes with low expression in the heatmap after scaling which suggests the scaling worked.
+
+
+```{r}
+# Get the expression values for a specific gene
+gene_of_interest <- "ACTB"
+expression_before_scaling <- GetAssayData(pbmc, slot = "data")[gene_of_interest, ]
+
+# Scale the data
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+# Get the expression values for the same gene after scaling
+expression_after_scaling <- GetAssayData(pbmc, slot = "scale.data")[gene_of_interest, ]
+
+# Create a boxplot to compare the expression values before and after scaling
+boxplot(expression_before_scaling, expression_after_scaling,
+        names = c("Before scaling", "After scaling"),
+        main = gene_of_interest)
+
+```
+
+
+# We perform PCA on the scaled data:
+ PCA can be used to reduce the dimensionality of the data by identifying the major sources of variation and projecting the data onto a lower-dimensional space.
+
+```{r}
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+```
+
+# Examine and visualize PCA results a few different ways.
+RNA-seq datasets can be highly dimensional, with thousands of genes measured in each sample.
+```{r}
+print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
+```
+
+```{r}
+VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
+```
+
+
+```{r}
+saveRDS(pbmc, "pbmc_1.rds")
+```
+
+```{r}
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+```
+
+
+```{r}
+print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
+```
+
+
+```{r}
+VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
+```
+
+
+```{r}
+DimPlot(pbmc, reduction = "pca")
+```
+
+
+```{r}
+DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+```
+
+
+```{r, fig.height=20, fig.width=10}
+DimHeatmap(pbmc, dims = 1:15, cells = 500, balanced = TRUE)
+```
+
+
+
+```{r}
+# NOTE: This process can take a long time for big datasets, comment out for expediency. More
+# approximate techniques such as those implemented in ElbowPlot() can be used to reduce
+# computation time
+pbmc <- JackStraw(pbmc, num.replicate = 100)
+pbmc <- ScoreJackStraw(pbmc, dims = 1:20)
+```
+
+
+```{r}
+JackStrawPlot(pbmc, dims = 1:15)
+```
+
+# This helps to select dimensions for clustering analysis based on the variance of different PCAs.
+```{r}
+ElbowPlot(pbmc)
+```
+
+# Clustering
+Making cluster helps to identify subpopulations of cells with similar biological characteristics.
+ This line of code computes a nearest-neighbor graph for the cells in the "pbmc" dataset, based on the first 10 principal components. The FindNeighbors function uses a K-nearest neighbor algorithm to identify cells that are similar to each other in terms of their gene expression profiles. The result of this step is a graph where each cell is connected to its nearest neighbors.
+The resolution parameter controls the granularity of the clustering, with higher values leading to more fine-grained clustering. In this case, a resolution of 1.5 is used to identify moderately-sized clusters.
+```{r}
+pbmc <- FindNeighbors(pbmc, dims = 1:6)
+pbmc <- FindClusters(pbmc, resolution = 0.7)
+```
+# Using non-linear dimensional reduction techniques, UMAP, to visualize and explore these cluster datasets.
+Uniform Manifold Approximation and Projection (UMAP) works by modeling the data as a high-dimensional manifold and finding a low-dimensional embedding that preserves the manifold structure. Here, UMAP is used to visualize clusters of cells with similar expression profiles, or to identify genes that drive differences between cell types.
+
+In this analysis, we chose 4 dimensions since the standard deviation of the PCA drops after fifth principal component and including more dimensions only adds noise. Still, there are two small clusters, at (-2, -2.5) which a small population of cells showing different cluster identities. This might be due to contamination in these cells. One way to tackle this is to manually check for highly expressed features/genes in these cells and assign them their corresponding cluster identity.
+```{r}
+pbmc <- RunUMAP(pbmc, dims = 1:6 )
+DimPlot(pbmc, reduction = "umap")
+```
+Here we can see three different clusters. 
+# Looking at the cluster identity of first 5 cells in the metadata 
+```{r}
+pbmc@meta.data[1:5,]
+```
+
+# find all markers of cluster 2
+```{r}
+cluster2.markers <- FindMarkers(pbmc, ident.1 = 2, min.pct = 0.25)
+head(cluster2.markers, n = 5)
+```
+
+# finding all markers distinguishing cluster 5 from clusters 0 and 3
+```{r}
+cluster5.markers <- FindMarkers(pbmc, ident.1 = 2, ident.2 = c(0, 3), min.pct = 0.25)
+head(cluster5.markers, n = 5)
+```
+
+
+
+# find markers for every cluster compared to all remaining cells, report only the positive ones.
+```{r}
+pbmc.markers <- FindAllMarkers(pbmc, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+pbmc.markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 2, order_by = avg_log2FC)
+```
+
+
+# The ROC test returns the ‘classification power’ for any individual marker (ranging from 0 - random, to 1 - perfect).
+```{r}
+cluster0.markers <- FindMarkers(pbmc, ident.1 = 0, logfc.threshold = 0.25, test.use = "roc", only.pos = TRUE)
+```
+ #  Visualizing expression probability distributions across clusters
+```{r}
+VlnPlot(pbmc, features = c("MS4A1", "CD79A"))
+```
+
+# Plotting raw counts as well using different plots.
+Vln plots to see expression profile of two genes NKG7 and PF4 in different clusters. 
+```{r}
+VlnPlot(pbmc, features = c("NKG7", "PF4"), slot = "counts", log = TRUE)
+```
+
+# Feature plots show the expression level of varaible genes in different cell clusters.
+```{r, fig.height=10, fig.width=10}
+FeaturePlot(pbmc, features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP",
+    "CD8A"))
+```
+
+# Heat maps show genes that are differentailly expressed in different clusters.
+This helps to identify marker genes to assign names to each clusters. 
+```{r, fig.height=10, fig.width=10}
+pbmc.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+DoHeatmap(pbmc, features = top10$gene) + NoLegend()
+```
+
+# Assigning cell type identity to clusters
+Here we are looking for distinct markers in each clusters to give them a cell identity.
+```{r}
+new.cluster.ids <- c("1", "2", "B cells", "4", "5", "6",
+    "7", "8", "9")
+names(new.cluster.ids) <- levels(pbmc)
+pbmc <- RenameIdents(pbmc, new.cluster.ids)
+DimPlot(pbmc, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+# Using dot plots to visaulize clusters
+Here we see five different clusters with different expression in profiles. 
+Cluster ID	Markers	Cell Type
+0	IL7R, CCR7	Naive CD4+ T
+1	CD14, LYZ	CD14+ Mono
+2	IL7R, S100A4	Memory CD4+
+3	MS4A1	B
+4	CD8A	CD8+ T
+5	FCGR3A, MS4A7	FCGR3A+ Mono
+6	GNLY, NKG7	NK
+7	FCER1A, CST3	DC
+8	PPBP	Platelet
+
+Here we can see the markers of each cell types. However, the clusters generated here include markers from different cell types. One way to tackle this is to increase the resolution and have more clusters and try to assign identity to clusters. 
+
+Out of the 9 clusters here, no clusters expressed the markers for Platelets.
+
+All clusters contain cells from different cell types but with an ununiform distribution. 
+FOr example, Cluster 1 and 2 both contain Naive CD4 + T cells but cluster 2 does not contain CCR7 expression. These clusters also contain LYZ and S100A4 gene which suggests it also includes CD14+ Mono and Memory CD4+ cells.
+
+Cluster B differentially expresses MS4A1 gene which suggests these are B cells.
+```{r, fig.height=5, fig.width=7}
+DotPlot(pbmc, features = c("IL7R", "CCR7", "CD14", "LYZ", "S100A4", "MS4A1", "CD8A", "FCGR3A", "MS4A7", "NKG7", "FCER1A", "CST3", "PPBP")) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+# Feature plot to visualize expression of gene of interest in different clusters
+```{r, fig.height=10, fig.width=10}
+FeaturePlot(pbmc, features = c("IL7R", "CCR7", "CD14", "LYZ", "S100A4", "MS4A1", "CD8A", "FCGR3A", "MS4A7", "NKG7", "FCER1A", "CST3", "PPBP"))
+```
+
+# QC for clustering
+Since cells can be clustered on the basis of different biological or technical artifacts such as cell cycle states or sequencing bias for different genes. 
+Here we are counting the normal of RNA in different clusters to see if this is a factor affecting the clustering here. However, we can see the number of RNA is almost uniformly distributed among all clusters.
+```{r}
+FeaturePlot(pbmc, features = "nCount_RNA")
+```
+
+# Visulazing the clusters using ggPlot.
+```{r}
+test_gene_expression <- pbmc@assays$RNA@data[c(1,2,3),]
+test_gene_expression <- as.data.frame(test_gene_expression)
+# swap columns and rows
+test_gene_expression <- t(test_gene_expression)
+library(reshape2)
+# melt for ggplotinput
+test_gene_expression<-melt(test_gene_expression, ID = 0)
+# plot
+ggplot(data = test_gene_expression, mapping = aes(x = Var2, y = value)) +geom_boxplot()
+```
+The x-axis represents the three genes (Var2), and the y-axis represents the expression level (value).
+
+# Extracting cell ‘locations’ on the UMAP from the Seurat object and creating a ggplot of cells, colored by their cluster identity.
+```{r}
+pbmc_umap<-as.data.frame(pbmc[["umap"]]@cell.embeddings)
+pbmc_umap$barcode<-rownames(pbmc_umap)
+# extract cluster numbers/names from Seurat object
+pbmc_clusters<-as.data.frame(pbmc@active.ident)
+pbmc_clusters$barcode<-rownames(pbmc_clusters)
+# merge cluster names/numbers and cell ‘locations’
+pbmc_umap_barcodes<-merge(pbmc_clusters, pbmc_umap, by = "barcode")
+# rename columns$ 
+colnames(pbmc_umap_barcodes) <-c("barcode", "cell_type", "UMAP_1","UMAP_2")
+umap_plot<-ggplot(pbmc_umap_barcodes, mapping = aes(x = UMAP_1, y = UMAP_2,color= cell_type, shape = cell_type, fill = cell_type)) +geom_point()
+umap_plot
+```
+
+The clusters 7, 8 and 9 are missing in the plot, which might be due to many reasons such as a small number of cells in these clusters, clusters are based on lowly expressed genes, etc. 
+
+
+# Counting the number of cells in each cluster
+```{r}
+table(pbmc@meta.data$seurat_clusters)
+
+```
+
+```{r}
+pbmc$broad.cell.types <- Idents(pbmc)
+```
+# Visualizing the number of cells in each cluster
+```{r}
+data <- as.data.frame(table(pbmc$broad.cell.types))
+colnames(data) <- c("cell.type", "count")
+
+ncells <- ggplot(data, aes(x=cell.type, y=count, fill=cell.type)) +
+  geom_col() +
+  theme_classic() +
+  geom_text(aes(label=count),
+            position=position_dodge(width=0.9),
+            vjust=-0.25) +
+  ggtitle("Cells per cluster") +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ncells
+```
+
+
+```{r}
+saveRDS(pbmc, file = "C:/Users/bbara/Desktop/pbmc_tutorial.rds")
+```
+
+```{r documentation}
+sessionInfo()
+```
